@@ -8,10 +8,11 @@ So main() below is written as a plain, non-async function, and any async
 setup work (like initializing the database) runs inside PTB's `post_init`
 hook, which PTB itself awaits for us before polling begins.
 """
-
 import logging
 import warnings
+import threading
 
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, TypeHandler
 from telegram.warnings import PTBUserWarning
@@ -56,6 +57,15 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Study Coach Bot is running!"
+
+def run_web_server():
+    app.run(host="0.0.0.0", port=8080)
 
 
 async def post_init(application) -> None:
@@ -141,6 +151,7 @@ def main() -> None:
     setup_scheduler(application)
 
     logger.info("Study Coach Bot is starting polling...")
+    threading.Thread(target=run_web_server).start()
     application.run_polling()
 
 
