@@ -64,6 +64,13 @@ app = Flask(__name__)
 def home():
     return "Study Coach Bot is running!"
 
+@app.route("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "study-coach-bot"
+    }
+
 def run_web_server():
     app.run(host="0.0.0.0", port=8080)
 
