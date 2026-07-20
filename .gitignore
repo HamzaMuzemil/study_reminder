@@ -1,0 +1,12 @@
+# Never commit your actual secrets or personal database
+.env
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
