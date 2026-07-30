@@ -42,7 +42,6 @@ def get_project_detail_keyboard(project_id: int, status: str) -> InlineKeyboardM
     elif status == "Paused":
         actions.append(InlineKeyboardButton("▶️ Resume", callback_data=f"proj_resume_{project_id}"))
     elif status == "Archived":
-        # Restore simply sets the project status back to 'Active'
         actions.append(InlineKeyboardButton("▶️ Restore Project", callback_data=f"proj_resume_{project_id}"))
 
     if status != "Archived":
@@ -77,10 +76,8 @@ def get_difficulty_keyboard() -> InlineKeyboardMarkup:
 
 def get_settings_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("⏰ Wake/Sleep Time", callback_data="set_sleep_wake"),
-         InlineKeyboardButton("🌐 Timezone", callback_data="set_timezone")],
+        [InlineKeyboardButton("⏰ Wake/Sleep Time", callback_data="set_sleep_wake")],
         [InlineKeyboardButton("📊 Frequency & Style", callback_data="set_frequency")],
-        [InlineKeyboardButton("🎨 Theme Change", callback_data="set_theme")],
         [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
     ]
     return InlineKeyboardMarkup(keyboard)

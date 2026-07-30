@@ -16,7 +16,7 @@ from sqlalchemy import select
 from models import Project, ProgressLog, Streak, User
 from keyboards.inline import get_main_menu_keyboard
 from services.coach_logic import calculate_metrics, get_user_local_today
-from messages.templates import make_progress_bar
+from messages.templates import make_progress_bar, get_theme_pack
 from handlers.common import cancel, menu_callback_fallback
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,6 @@ async def start_log_progress(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(msg, reply_markup=get_main_menu_keyboard(theme))
         return ConversationHandler.END
 
-    # Generate inline buttons for active projects
     keyboard_buttons = []
     for p in projects:
         keyboard_buttons.append([InlineKeyboardButton(p.name, callback_data=f"log_select_{p.id}")])
@@ -107,8 +106,8 @@ async def save_logged_progress(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
     user_id = update.effective_user.id
-    congrats_txt = None
-    milestone_txt = None
+    congrats_txt = ""
+    milestone_txt = ""
 
     async with AsyncSessionLocal() as session:
         user_res = await session.execute(select(User).where(User.id == user_id))
@@ -130,7 +129,7 @@ async def save_logged_progress(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if p.completed_amount >= p.total_amount:
             p.status = "Completed"
-            congrats_txt = f"🏆 *Congratulations!* You've finished *{escape_markdown(p.name, version=1)}*!"
+            congrats_txt = f"🏆 *Congratulations!* You've finished *{escape_markdown(p.name, version=1)}*!\n\n"
 
         streak_res = await session.execute(select(Streak).where(Streak.user_id == user_id))
         streak = streak_res.scalar_one_or_none()
@@ -152,7 +151,7 @@ async def save_logged_progress(update: Update, context: ContextTypes.DEFAULT_TYP
             if streak.current_streak in (7, 30, 100):
                 milestone_txt = (
                     f"🔥 *Streak milestone!* You've studied "
-                    f"{streak.current_streak} days in a row!"
+                    f"{streak.current_streak} days in a row!\n\n"
                 )
 
         await session.commit()
@@ -162,23 +161,27 @@ async def save_logged_progress(update: Update, context: ContextTypes.DEFAULT_TYP
         completed_amount = p.completed_amount
         total_amount = p.total_amount
 
-    if congrats_txt:
-        await update.message.reply_text(congrats_txt, parse_mode="Markdown")
-    if milestone_txt:
-        await update.message.reply_text(milestone_txt, parse_mode="Markdown")
-
+    icons = get_theme_pack(theme)
     bar_str = make_progress_bar(metrics['completion_pct'], theme)
 
-    success_msg = (
+    # Render success message directly alongside the ready-to-click dashboard
+    success_text = (
+        f"{congrats_txt}{milestone_txt}"
         f"✅ *Progress logged!*\n\n"
         f"📘 Project: *{proj_name}*\n"
         f"📥 Added: +{amount} {proj_unit}\n"
         f"📊 Completed: {completed_amount}/{total_amount} {proj_unit}\n"
         f"📈 Progress: {bar_str}\n\n"
-        f"🎯 Updated daily target: *{metrics['daily_target']} {proj_unit}/day*"
+        f"🎯 Updated daily target: *{metrics['daily_target']} {proj_unit}/day*\n\n"
+        f"-----------------------------------\n\n"
+        f"{icons['star']} *Study Coach Dashboard* {icons['star']}\n\n"
+        "Pick an option below to manage your projects, check your progress, "
+        "or adjust your settings."
     )
 
-    await update.message.reply_text(success_msg, parse_mode="Markdown", reply_markup=get_main_menu_keyboard(theme))
+    await update.message.reply_text(success_text, parse_mode="Markdown", reply_markup=get_main_menu_keyboard(theme))
+    
+    context.user_data.clear()
     return ConversationHandler.END
 
 

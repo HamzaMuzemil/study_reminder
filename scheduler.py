@@ -1,46 +1,17 @@
-"""
-scheduler.py
-
-There is exactly ONE scheduler in this whole project: python-telegram-bot's
-own built-in `application.job_queue`. It registers a single recurring "tick"
-job that runs every TICK_INTERVAL_SECONDS.
-
-On every tick, for every user, in that user's own local time, this file:
-  1. Generates today's random reminder slots, once per user per local day.
-  2. Sends any reminder slots that are now due.
-  3. Sends the daily summary, once per user per local day, after a local hour.
-  4. Sends the weekly summary, once per user per local week, on a local
-     weekday/hour.
-
-Why one DB-driven tick instead of scheduling each reminder as its own
-one-off job:
-  A one-off job (job_queue.run_once) only lives in memory. If the bot
-  process restarts -- a crash, a deploy, your laptop going to sleep --
-  every not-yet-fired job for the rest of the day disappears with no
-  record it ever existed. A tick that re-reads "what's due right now"
-  from the database every time it runs doesn't have that problem: whatever
-  the process was doing before a restart, the very next tick just picks up
-  wherever the saved state says it should be. That's the difference between
-  "reminders occasionally arrive a few minutes late" and "reminders
-  silently vanish for the rest of the day whenever the bot restarts."
-
-Trade-off: reminders and summaries fire within one tick interval (default
-10 minutes) of their target time, not to-the-minute. That's a fine trade
-for a study-reminder bot, and far better than the alternative.
-"""
-
+# scheduler.py
 import logging
 import random
 from datetime import datetime, timedelta
 
 import pytz
-from sqlalchemy import select
+from sqlalchemy import select, func
 from telegram.ext import Application, ContextTypes
 
 from database import AsyncSessionLocal
 from models import Project, ProgressLog, ReminderHistory, User
 from services.coach_logic import calculate_metrics, calculate_smart_reminders, get_user_local_today, utc_now_naive
-from messages.templates import QUOTES, get_motivational_message, get_theme_pack
+from messages.templates import get_alternating_quote, get_motivational_message, get_theme_pack, make_progress_bar
+from config import get_system_timezone_name
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +23,11 @@ WEEKLY_SUMMARY_LOCAL_HOUR = 20              # send weekly summary at/after 20:00
 
 
 def _user_tz(user: User) -> pytz.BaseTzInfo:
-    """Safely resolves a user's stored timezone string, defaulting to UTC
-    for anything missing or invalid so one bad row can't break the tick
-    for every other user."""
     try:
-        return pytz.timezone(user.timezone) if user.timezone else pytz.utc
+        # Fallback to detected system timezone if UTC is set to ensure local alignment
+        tz_name = user.timezone if user.timezone and user.timezone != "UTC" else get_system_timezone_name()
+        return pytz.timezone(tz_name)
     except pytz.UnknownTimeZoneError:
-        logger.warning(f"Unknown timezone '{user.timezone}' for user {user.id}; defaulting to UTC")
         return pytz.utc
 
 
@@ -72,20 +41,31 @@ def _parse_hhmm(value: str, fallback=(8, 0)) -> tuple[int, int]:
     return fallback
 
 
-async def run_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Single entry point invoked every TICK_INTERVAL_SECONDS by PTB's job_queue.
+def is_user_awake(user: User) -> bool:
+    """Verifies if the current system local time is inside the user's wake window."""
+    tz = _user_tz(user)
+    now_local = datetime.now(tz)
 
-    Each user gets their own session and their own commit. Sharing one
-    session (and one commit) across every user in the tick meant a single
-    failure partway through -- a bad row, a brief database lock on commit,
-    any exception at all -- rolled back the *entire* transaction, including
-    reminders that had already been successfully sent to Telegram earlier
-    in the same loop. Those reminder rows would still show status
-    "Scheduled" after the rollback, so the next tick would see them as due
-    again and re-send them. Committing per-user closes that window: once a
-    user's tick is committed, nothing that happens to a later user in the
-    same run can undo it.
-    """
+    try:
+        wake_h, wake_m = map(int, user.wake_time.split(":"))
+        sleep_h, sleep_m = map(int, user.sleep_time.split(":"))
+    except Exception:
+        wake_h, wake_m = 8, 0
+        sleep_h, sleep_m = 23, 0
+
+    now_minutes = now_local.hour * 60 + now_local.minute
+    start_minutes = wake_h * 60 + wake_m
+    end_minutes = sleep_h * 60 + sleep_m
+
+    if end_minutes <= start_minutes:
+        # Sleep window wraps past midnight, e.g. 08:00 to 02:00 (next day)
+        return now_minutes >= start_minutes or now_minutes < end_minutes
+    else:
+        # Normal day window, e.g. 08:00 to 23:00
+        return start_minutes <= now_minutes < end_minutes
+
+
+async def run_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User.id))
         user_ids = result.scalars().all()
@@ -95,16 +75,10 @@ async def run_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
             try:
                 user = await session.get(User, uid)
                 if user is None:
-                    # Deleted between the id query above and now -- nothing
-                    # to process.
                     continue
                 await _process_user_tick(session, context, user)
                 await session.commit()
             except Exception:
-                # One user's bad data or a delivery failure should never
-                # stop every other user's reminders from being processed,
-                # and must not roll back any other user's already-committed
-                # tick.
                 logger.exception(f"Tick processing failed for user {uid}")
 
 
@@ -123,27 +97,16 @@ async def _process_user_tick(session, context, user: User) -> None:
         await _dispatch_due_reminders(session, context, user)
         await _maybe_send_daily_summary(session, context, user, projects, now_local, today_local)
 
-    # Weekly summary can still be worth sending even with zero active
-    # projects right now (e.g. "you completed 2 projects this week").
     await _maybe_send_weekly_summary(session, context, user, now_local, today_local)
 
 
 async def _maybe_generate_reminders(session, user, projects, now_local, today_local) -> None:
-    """Generates today's reminder slots once per user per local day.
-
-    Storing `last_reminder_gen_date` on the User row (rather than just
-    checking "do any Scheduled rows exist for today") is what makes this
-    safe to call every single tick without ever generating duplicates,
-    and it's a plain database column so it survives a restart correctly.
-    """
     if user.last_reminder_gen_date == today_local:
         return
 
     wake_h, wake_m = _parse_hhmm(user.wake_time, (8, 0))
     wake_today = now_local.replace(hour=wake_h, minute=wake_m, second=0, microsecond=0)
 
-    # Don't generate before the user is even awake yet today; the next
-    # tick after their wake time will generate normally.
     if now_local < wake_today:
         return
 
@@ -156,12 +119,6 @@ async def _maybe_generate_reminders(session, user, projects, now_local, today_lo
 
 
 async def _dispatch_due_reminders(session, context, user) -> None:
-    """Sends any reminder that is currently due, by asking the database
-    what's due right now -- not by trusting an in-memory job to still
-    exist. This is the part that makes restarts safe: even if the bot
-    was down when a reminder was supposed to fire, the row is still
-    sitting there with status="Scheduled", and this query finds it on
-    the next tick after startup."""
     now_utc = utc_now_naive()
 
     due_res = await session.execute(
@@ -175,6 +132,12 @@ async def _dispatch_due_reminders(session, context, user) -> None:
     if not due:
         return
 
+    # Enforce bedtime rules: If user is asleep, discard pending scheduled reminders to avoid waking them up.
+    if not is_user_awake(user):
+        for reminder in due:
+            reminder.status = "Missed"
+        return
+
     proj_res = await session.execute(
         select(Project).where(Project.user_id == user.id, Project.status == "Active")
     )
@@ -183,19 +146,32 @@ async def _dispatch_due_reminders(session, context, user) -> None:
     for reminder in due:
         age = now_utc - reminder.scheduled_for
         if age > REMINDER_STALE_AFTER or not projects:
-            # Too old to be a useful nudge (e.g. bot was down for hours),
-            # or the user has nothing active left to be reminded about.
             reminder.status = "Missed"
             continue
 
         chosen_project = random.choice(projects)
         metrics = calculate_metrics(chosen_project, today=get_user_local_today(user))
+        
+        # Calculate indexes dynamically for alternating Amharic/English quotes
+        log_res = await session.execute(
+            select(func.count(ProgressLog.id)).join(Project).where(Project.user_id == user.id)
+        )
+        log_cnt = log_res.scalar() or 0
+        rem_res = await session.execute(
+            select(func.count(ReminderHistory.id)).where(ReminderHistory.user_id == user.id, ReminderHistory.status == "Sent")
+        )
+        rem_cnt = rem_res.scalar() or 0
+        total_runs = log_cnt + rem_cnt
+
+        quote = get_alternating_quote(total_runs)
+
         msg = get_motivational_message(
             project_name=chosen_project.name,
             remaining=metrics["daily_target"],
             unit=chosen_project.unit,
             pace=metrics["pace_status"],
             theme=user.theme,
+            quote=quote
         )
         try:
             await context.bot.send_message(chat_id=user.id, text=msg, parse_mode="Markdown")
@@ -213,6 +189,8 @@ async def _maybe_send_daily_summary(session, context, user, projects, now_local,
         return
     if now_local.hour < DAILY_SUMMARY_LOCAL_HOUR:
         return
+    if not is_user_awake(user):
+        return
 
     icons = get_theme_pack(user.theme)
     summary_txt = f"{icons['stats']} *Daily Progress Summary* ({today_local.isoformat()}):\n\n"
@@ -227,10 +205,23 @@ async def _maybe_send_daily_summary(session, context, user, projects, now_local,
             f"📚 *{p.name}*:\n"
             f"- Done Today: {logged_today} {p.unit}\n"
             f"- Target set: {metrics['daily_target']} {p.unit}\n"
+            f"- Progress bar: {make_progress_bar(metrics['completion_pct'], user.theme)}\n"
             f"- Completion Progress: {metrics['completion_pct']}%\n\n"
         )
 
-    summary_txt += f"💡 _\"{random.choice(QUOTES)}\"_"
+    # Calculate indexes dynamically for alternating Amharic/English quotes
+    log_res = await session.execute(
+        select(func.count(ProgressLog.id)).join(Project).where(Project.user_id == user.id)
+    )
+    log_cnt = log_res.scalar() or 0
+    rem_res = await session.execute(
+        select(func.count(ReminderHistory.id)).where(ReminderHistory.user_id == user.id, ReminderHistory.status == "Sent")
+    )
+    rem_cnt = rem_res.scalar() or 0
+    total_runs = log_cnt + rem_cnt
+
+    quote = get_alternating_quote(total_runs)
+    summary_txt += f"💡 _\"{quote}\"_"
 
     try:
         await context.bot.send_message(chat_id=user.id, text=summary_txt, parse_mode="Markdown")
@@ -247,6 +238,8 @@ async def _maybe_send_weekly_summary(session, context, user, now_local, today_lo
     if now_local.weekday() != WEEKLY_SUMMARY_LOCAL_WEEKDAY:
         return
     if now_local.hour < WEEKLY_SUMMARY_LOCAL_HOUR:
+        return
+    if not is_user_awake(user):
         return
 
     proj_res = await session.execute(select(Project).where(Project.user_id == user.id))
@@ -297,13 +290,6 @@ async def _maybe_send_weekly_summary(session, context, user, now_local, today_lo
 
 
 def setup_scheduler(application: Application) -> None:
-    """
-    Registers the single recurring tick job on PTB's own job_queue.
-
-    Requires the bot to be installed with the `job-queue` extra:
-        pip install "python-telegram-bot[job-queue]"
-    (already set correctly in requirements.txt).
-    """
     if application.job_queue is None:
         raise RuntimeError(
             "JobQueue is not available. Install with: "

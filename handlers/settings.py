@@ -1,6 +1,5 @@
 # handlers/settings.py
 import logging
-import pytz
 from telegram import Update
 from telegram.ext import (
     ContextTypes,
@@ -18,7 +17,7 @@ from handlers.common import cancel, menu_callback_fallback
 
 logger = logging.getLogger(__name__)
 
-SET_TIMES, SET_TZ, SET_FREQ, SET_STYLE, SET_THEME = range(5)
+SET_TIMES, SET_FREQ, SET_STYLE = range(3)
 
 
 # --- Helper functions for 12h/24h conversion ---
@@ -95,17 +94,14 @@ async def view_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Couldn't load your settings. Try /start first.")
         return
 
-    # Render display using normal AM/PM format
     wake_12 = format_24h_to_12h(user.wake_time)
     sleep_12 = format_24h_to_12h(user.sleep_time)
 
     settings_text = (
         f"⚙️ *Your Settings*\n\n"
         f"⏰ *Wake / Sleep*: {wake_12} / {sleep_12}\n"
-        f"🌐 *Timezone*: {user.timezone}\n"
         f"📊 *Reminders*: {user.reminder_frequency}/day\n"
-        f"🗣️ *Style*: {user.notification_style}\n"
-        f"🎨 *Theme*: {user.theme}\n\n"
+        f"🗣️ *Style*: {user.notification_style}\n\n"
         "Tap a setting below to change it:"
     )
 
@@ -137,7 +133,6 @@ async def save_sleep_wake(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if len(parts) != 2:
             raise ValueError("Missing hyphen separator")
         
-        # Parse AM/PM inputs safely into standardized 24h formats for database compatibility
         wake_part = parse_12h_to_24h(parts[0])
         sleep_part = parse_12h_to_24h(parts[1])
     except Exception:
@@ -158,44 +153,6 @@ async def save_sleep_wake(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await update.message.reply_text(
         "✅ Wake/sleep times updated! Reminders will use this from the next reminder batch onward.",
-        reply_markup=get_main_menu_keyboard()
-    )
-    return ConversationHandler.END
-
-
-# --- Timezone ---
-
-async def start_set_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        "🌐 *Set Your Timezone*\n\n"
-        "Send your timezone name from the tz database.\n"
-        "_(Examples: Europe/London, America/New_York, Asia/Kolkata, Asia/Karachi)_",
-        parse_mode="Markdown",
-    )
-    return SET_TZ
-
-
-async def save_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    tz_text = update.message.text.strip()
-    if tz_text not in pytz.all_timezones:
-        await update.message.reply_text(
-            "That's not a recognized timezone name. Please send a standard tz database "
-            "name like `Europe/Paris` or `America/Chicago`:",
-            parse_mode="Markdown",
-        )
-        return SET_TZ
-
-    async with AsyncSessionLocal() as session:
-        user_res = await session.execute(select(User).where(User.id == update.effective_user.id))
-        user = user_res.scalar_one_or_none()
-        if user:
-            user.timezone = tz_text
-            await session.commit()
-
-    await update.message.reply_text(
-        "✅ Timezone updated! Your reminders and daily targets will now use this timezone.",
         reply_markup=get_main_menu_keyboard()
     )
     return ConversationHandler.END
@@ -258,52 +215,15 @@ async def save_style(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-# --- Theme ---
-
-async def start_set_theme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        "🎨 *Set Bot Theme*\n\n"
-        "Send either *Emoji* or *Minimalist*:",
-        parse_mode="Markdown",
-    )
-    return SET_THEME
-
-
-async def save_theme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    theme_text = update.message.text.strip().title()
-    if theme_text not in ("Emoji", "Minimalist"):
-        await update.message.reply_text("Please send exactly 'Emoji' or 'Minimalist':")
-        return SET_THEME
-
-    async with AsyncSessionLocal() as session:
-        user_res = await session.execute(select(User).where(User.id == update.effective_user.id))
-        user = user_res.scalar_one_or_none()
-        if user:
-            user.theme = theme_text
-            await session.commit()
-
-    await update.message.reply_text(
-        f"✅ Theme updated to {theme_text}.",
-        reply_markup=get_main_menu_keyboard(theme_text)
-    )
-    return ConversationHandler.END
-
-
 settings_conv_handler = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(start_set_sleep_wake, pattern="^set_sleep_wake$"),
-        CallbackQueryHandler(start_set_timezone, pattern="^set_timezone$"),
         CallbackQueryHandler(start_set_frequency, pattern="^set_frequency$"),
-        CallbackQueryHandler(start_set_theme, pattern="^set_theme$"),
     ],
     states={
         SET_TIMES: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_sleep_wake)],
-        SET_TZ: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_timezone)],
         SET_FREQ: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_frequency)],
         SET_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_style)],
-        SET_THEME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_theme)],
     },
     fallbacks=[
         CommandHandler("cancel", cancel),

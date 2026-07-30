@@ -14,7 +14,11 @@ THEMES = {
     }
 }
 
-MOTIVATIONAL_TEMPLATES = [
+ENGLISH_QUOTES = [
+    "The secret of getting ahead is getting started. - Mark Twain",
+    "It always seems impossible until it's done. - Nelson Mandela",
+    "Our greatest weakness lies in giving up. - Thomas Edison",
+    "Don't watch the clock; do what it does. Keep going. - Sam Levenson",
     "Future you will thank today's effort.",
     "Consistency beats intensity. Keep going!",
     "Small daily progress compounds into massive success.",
@@ -27,24 +31,26 @@ MOTIVATIONAL_TEMPLATES = [
     "Action is the foundational key to all success."
 ]
 
-BEHIND_TEMPLATES = [
-    "Today's target increased. The sooner you catch up, the easier tomorrow becomes.",
-    "A minor setback is a setup for a major comeback. Let's study now!",
-    "Your dreams are waiting on the other side of this challenge. Catch up!",
-    "Don't lose momentum. Let's finish today's updated plan."
-]
-
-AHEAD_TEMPLATES = [
-    "Excellent work! You can even finish early at this pace.",
-    "You are absolutely crushing your goals! Keep setting the standard.",
-    "You've bought yourself some extra flexibility today. Keep up the clean streak!"
-]
-
-QUOTES = [
-    "The secret of getting ahead is getting started. - Mark Twain",
-    "It always seems impossible until it's done. - Nelson Mandela",
-    "Our greatest weakness lies in giving up. - Thomas Edison",
-    "Don't watch the clock; do what it does. Keep going. - Sam Levenson"
+AMHARIC_QUOTES = [
+    "ካላነበቡ አይታወቁ፣ ካልዘሩ አይታጨዱ።",
+    "ቀስ በቀስ፣ እንቁላል በእግሩ ይሄዳል",
+    "የተማረ ያውቃል፣ ያረሰ ይበላል",
+    "ከመጽሐፍ የወጣ እውቀት፣ ከወርቅ የጠራ ሀብት ነው",
+    "ያነበበ ይበልጣል፣ የጠየቀ ይረዳል፤ የማይደክም ያሸንፋል",
+    "ዛሬ ያነበበ፣ ነገ ይመራል",
+    "የዕውቀት መጀመሪያ ማንበብ፣ የመጨረሻው ጥበብ ነው",
+    "ሰው በምግብ ብቻ አይኖርም፣ አእምሮም በንባብ ያድጋል",
+    "ውኃ ቢወርዱበት አያልቅም፣ መጽሐፍ ቢያነቡት አይሰለችም",
+    "ያልደከሙበት እውቀት፣ ያልዘሩት እህል ነው",
+    "የጨለማ መብራት መጽሐፍ፣ የድንቁርና መድኃኒት እውቀት ነው",
+    "በትእግሥት ያነበበ፣ በመጨረሻ ይደሰታል",
+    "የዛሬ ድካም፣ የነገ ብርሃን ነው",
+    "እውቀት ከሀብት ይበልጣል፣ ማንበብ ከምንም ይልቃል",
+    "የተከፈተ መጽሐፍ፣ ክፍት አእምሮን ይፈጥራል",
+    "ሳይማሩ ማወቅ፣ ሳይዘሩ ማጨድ የለም",
+    "አንድ ገጽ ማንበብ፣ ወደ ስኬት አንድ እርምጃ መራመድ ነው",
+    "የጽናት ፍሬ ሁልጊዜ ጣፋጭ ነው",
+    "ዛሬ የተከልከው የንባብ ዘር፣ ነገ ትልቅ ጥላ ይሆናል"
 ]
 
 
@@ -64,16 +70,21 @@ def make_progress_bar(pct: float, theme: str = "Emoji") -> str:
     return f"{filled_char * filled_count}{empty_char * empty_count} {pct:.1f}%"
 
 
-def get_motivational_message(project_name: str, remaining: float, unit: str, pace: str, theme: str) -> str:
+def get_alternating_quote(total_runs: int) -> str:
+    """
+    Returns an alternating English/Amharic quote based on user total runs
+    without repeating consecutive quotes.
+    """
+    if total_runs % 2 == 0:
+        idx = (total_runs // 2) % len(ENGLISH_QUOTES)
+        return ENGLISH_QUOTES[idx]
+    else:
+        idx = (total_runs // 2) % len(AMHARIC_QUOTES)
+        return AMHARIC_QUOTES[idx]
+
+
+def get_motivational_message(project_name: str, remaining: float, unit: str, pace: str, theme: str, quote: str) -> str:
     icons = get_theme_pack(theme)
     base = f"{icons['clock']} *Study Coach Prompt* for {project_name}:\n"
-
-    if pace == "Behind Schedule":
-        quote = random.choice(BEHIND_TEMPLATES)
-    elif pace == "Ahead of Schedule":
-        quote = random.choice(AHEAD_TEMPLATES)
-    else:
-        quote = random.choice(MOTIVATIONAL_TEMPLATES)
-
     specs = f"Remaining target: *{remaining} {unit}*.\n"
     return f"{base}{specs}\n_\"{quote}\"_"
