@@ -88,6 +88,6 @@ def get_alternating_quote(total_runs: int) -> str:
 
 def get_motivational_message(project_name: str, remaining: float, unit: str, pace: str, theme: str, quote: str) -> str:
     icons = get_theme_pack(theme)
-    base = f"{icons['clock']} *Study Coach Prompt* for {project_name}:\n"
+    base = f"{icons['clock']} *Study Coach Reminder* for {project_name}:\n"
     specs = f"Remaining target: *{remaining} {unit}*.\n"
     return f"{base}{specs}\n_\"{quote}\"_"
