@@ -79,17 +79,17 @@ async def add_project_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def add_project_course(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["p_course"] = update.message.text
-    return await transition_to_type(update.message, context)
+    return await transition_to_type(update, context)
 
 
 async def add_project_course_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     context.user_data["p_course"] = None
-    return await transition_to_type(query.message, context, edit=True)
+    return await transition_to_type(update, context, edit=True)
 
 
-async def transition_to_type(message, context, edit=False):
+async def transition_to_type(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False) -> int:
     # Retrieve base type keyboard and attach Cancel button to the bottom row
     orig_markup = get_project_type_keyboard()
     keyboard = list(orig_markup.inline_keyboard)
@@ -100,10 +100,16 @@ async def transition_to_type(message, context, edit=False):
         "🛠️ *Step 3 of 11: Material Format*\n\n"
         "Select the medium format of your study material:"
     )
-    if edit:
-        await message.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+    
+    # Corrected update validation to prevent AttributeError on Message instances
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
     else:
-        await message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+        if update.message:
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+        else:
+            await update.effective_chat.send_message(text, parse_mode="Markdown", reply_markup=reply_markup)
+            
     return PROJ_TYPE
 
 

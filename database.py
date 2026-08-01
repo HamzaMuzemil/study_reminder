@@ -1,3 +1,4 @@
+# database.py
 import logging
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -6,30 +7,35 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-engine = create_async_engine(Config.DATABASE_URL, echo=False)
+# Configure connection arguments dynamically based on database type
+connect_args = {}
+if Config.DATABASE_URL.startswith("postgresql"):
+    # Disables prepared statement caching to support transaction-mode connection poolers (like Supavisor)
+    connect_args["statement_cache_size"] = 0
+
+engine = create_async_engine(
+    Config.DATABASE_URL,
+    connect_args=connect_args,
+    echo=False
+)
 
 
 @event.listens_for(engine.sync_engine, "connect")
 def _set_sqlite_pragma(dbapi_connection, connection_record):
     """
-    Runs once per new SQLite connection.
-
-    - WAL mode lets one connection write while others read, instead of
-      locking the whole database file on every write. With a Telegram bot,
-      that means someone logging progress doesn't get blocked by the
-      background scheduler tick (or vice versa).
-    - foreign_keys=ON makes SQLite actually enforce the ondelete="CASCADE"
-      rules declared in models.py (SQLite ignores them by default).
+    Runs once per new database connection.
+    
+    Only applies WAL mode and foreign key enforcement if the active 
+    connection is actually using SQLite to avoid aborting transactions on PostgreSQL.
     """
-    try:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-    except Exception:
-        # If DATABASE_URL ever points somewhere non-SQLite, these pragmas
-        # simply wouldn't apply -- fail safe rather than crash startup.
-        pass
+    if "sqlite" in engine.url.drivername:
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+        except Exception:
+            pass
 
 
 AsyncSessionLocal = async_sessionmaker(
