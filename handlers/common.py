@@ -1,6 +1,7 @@
 # handlers/common.py
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.helpers import escape_markdown
 from telegram.ext import ContextTypes, ConversationHandler
 from database import AsyncSessionLocal
 from sqlalchemy import select
@@ -38,11 +39,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user(session, user_tg)
-        theme = user.theme
+        theme = user.theme if user else "Emoji"
 
     icons = get_theme_pack(theme)
+    
+    # Safely escape any special markdown characters in the user's Telegram first name
+    escaped_name = escape_markdown(user_tg.first_name, version=1)
+    
     welcome_text = (
-        f"{icons['star']} *Welcome to your Study Coach, {user_tg.first_name}!* {icons['star']}\n\n"
+        f"{icons['star']} *Welcome to your Study Coach, {escaped_name}!* {icons['star']}\n\n"
         "Let's turn your study material into a clear daily plan. "
         "Use the buttons below to add a project, log progress, or check your stats."
     )
@@ -133,7 +138,6 @@ async def menu_callback_fallback(update: Update, context: ContextTypes.DEFAULT_T
 
     data = query.data
     
-    # Avoid circular import at import-time by importing on-demand inside the function
     if data == "menu_main":
         await dashboard_callback(update, context)
     elif data == "menu_list_projects":

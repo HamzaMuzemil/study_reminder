@@ -1,25 +1,22 @@
+# models.py
 from datetime import datetime, date, timezone
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, Float, Date, DateTime, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from database import Base
 
 
 def _utc_now_naive() -> datetime:
-    """Same convention as services/coach_logic.py's utc_now_naive() --
-    duplicated here in miniature (rather than imported) to avoid a
-    circular import, since coach_logic.py itself imports from this file."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True)  # Telegram user ID
+    # Changed from Integer to BigInteger to support 64-bit Telegram IDs on PostgreSQL
+    id = Column(BigInteger, primary_key=True)  # Telegram user ID
     username = Column(String, nullable=True)
     joined_at = Column(DateTime, default=_utc_now_naive)
 
-    # Settings (see config.py Config.DEFAULT_* for the values applied
-    # when a brand-new user first sends /start)
     wake_time = Column(String, default="08:00")  # HH:MM, 24-hour
     sleep_time = Column(String, default="23:00")  # HH:MM, 24-hour
     timezone = Column(String, default="UTC")  # tz database name, e.g. "Europe/London"
@@ -31,11 +28,6 @@ class User(Base):
     weekly_summary_enabled = Column(Boolean, default=True)
     theme = Column(String, default="Emoji")  # Emoji, Minimalist
 
-    # Idempotency markers for the tick-based scheduler (see scheduler.py).
-    # Storing "last date we already handled this" in the database -- rather
-    # than in an in-memory job -- is what makes the scheduler restart-safe:
-    # if the bot process restarts, these columns still say what's already
-    # been done, so nothing gets sent twice and nothing gets silently lost.
     last_reminder_gen_date = Column(Date, nullable=True)
     last_daily_summary_date = Column(Date, nullable=True)
     last_weekly_summary_date = Column(Date, nullable=True)
@@ -49,7 +41,8 @@ class Project(Base):
     __tablename__ = "projects"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # Changed foreign key to BigInteger to match users.id
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
     course_name = Column(String, nullable=True)
     type = Column(String, nullable=False)  # Book, PDF, Slides, Notes, Videos
@@ -83,7 +76,8 @@ class ReminderHistory(Base):
     __tablename__ = "reminder_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # Changed foreign key to BigInteger to match users.id
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     scheduled_for = Column(DateTime, nullable=False)  # naive UTC
     sent_at = Column(DateTime, nullable=True)
     status = Column(String, default="Scheduled")  # Scheduled, Sent, Missed
@@ -95,7 +89,8 @@ class Streak(Base):
     __tablename__ = "streaks"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    # Changed foreign key to BigInteger to match users.id
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
     current_streak = Column(Integer, default=0)
     longest_streak = Column(Integer, default=0)
     last_activity_date = Column(Date, nullable=True)
