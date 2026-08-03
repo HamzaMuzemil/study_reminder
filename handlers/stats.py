@@ -40,7 +40,6 @@ async def view_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ----------------------------------------------------
         # 1. EXPERIENCE POINTS (XP) & LEVELS SYSTEM
         # ----------------------------------------------------
-        # We treat 1 completed unit of study as 100 XP
         xp_res = await session.execute(
             select(func.sum(ProgressLog.amount_completed))
             .join(Project)
@@ -109,6 +108,36 @@ async def view_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         prev_total = round(prev_res.scalar() or 0.0, 1)
 
+        # ----------------------------------------------------
+        # 4. GITHUB-STYLE 14-DAY HABIT GRID
+        # ----------------------------------------------------
+        # Query progress log dates for the last 14 days inclusive of today
+        log_dates_res = await session.execute(
+            select(ProgressLog.logged_at)
+            .join(Project)
+            .where(Project.user_id == user_id, ProgressLog.logged_at >= fourteen_days_ago)
+        )
+        logged_dates = {log_date for (log_date,) in log_dates_res.all()}
+
+        # Build grid row blocks (Week 1 and Week 2)
+        week1_blocks = []
+        for i in range(13, 6, -1):
+            target_date = local_today - timedelta(days=i)
+            if target_date in logged_dates:
+                week1_blocks.append("🟩" if theme == "Emoji" else "■")
+            else:
+                week1_blocks.append("⬜" if theme == "Emoji" else "□")
+
+        week2_blocks = []
+        for i in range(6, -1, -1):
+            target_date = local_today - timedelta(days=i)
+            if target_date in logged_dates:
+                week2_blocks.append("🟩" if theme == "Emoji" else "■")
+            else:
+                week2_blocks.append("⬜" if theme == "Emoji" else "□")
+
+        grid_str = f"W1: {' '.join(week1_blocks)}\nW2: {' '.join(week2_blocks)}"
+
     if not projects:
         empty_msg = f"{icons['warning']} You don't have any projects yet. Add one to start seeing stats here."
         if update.callback_query:
@@ -128,11 +157,14 @@ async def view_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_completed = sum(1 for p in projects if p.status == "Completed")
 
     stats_msg = (
-        f"{icons['stats']} *Your Stats & Academics*:\n\n"
+        f"{icons['stats']} *Your Stats & Academics*:\n"
+        f"-----------------------------------\n\n"
         f"🧙‍♂️ *Rank:* {academic_rank}\n"
         f"✨ *Level {level}:* ({total_xp} Total XP)\n"
         f"{xp_bar}\n"
         f"_{1000 - xp_in_level} XP needed to level up._\n\n"
+        f"📅 *14-Day Consistency Grid*:\n"
+        f"{grid_str}\n\n"
         f"🔥 *Streaks & Percentiles*:\n"
         f"- Current: *{current_streak_val} days*\n"
         f"- Longest: *{longest_streak_val} days*\n"

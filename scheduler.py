@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import pytz
 from sqlalchemy import select, func
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes
 
 from database import AsyncSessionLocal
@@ -58,10 +59,8 @@ def is_user_awake(user: User) -> bool:
     end_minutes = sleep_h * 60 + sleep_m
 
     if end_minutes <= start_minutes:
-        # Sleep window wraps past midnight, e.g. 08:00 to 02:00 (next day)
         return now_minutes >= start_minutes or now_minutes < end_minutes
     else:
-        # Normal day window, e.g. 08:00 to 23:00
         return start_minutes <= now_minutes < end_minutes
 
 
@@ -120,6 +119,8 @@ async def _maybe_generate_reminders(session, user, projects, now_local, today_lo
 
 async def _dispatch_due_reminders(session, context, user) -> None:
     now_utc = utc_now_naive()
+    tz = _user_tz(user)
+    today_local = datetime.now(tz).date()
 
     due_res = await session.execute(
         select(ReminderHistory).where(
@@ -132,7 +133,7 @@ async def _dispatch_due_reminders(session, context, user) -> None:
     if not due:
         return
 
-    # Enforce bedtime rules: If user is asleep, discard pending scheduled reminders to avoid waking them up.
+    # Discard overdue/backlog reminders during sleep hours
     if not is_user_awake(user):
         for reminder in due:
             reminder.status = "Missed"
@@ -143,14 +144,33 @@ async def _dispatch_due_reminders(session, context, user) -> None:
     )
     projects = proj_res.scalars().all()
 
+    # Intelligent peace filter: Filter out projects where the user has already met today's daily target
+    remaining_projects = []
+    for p in projects:
+        log_res = await session.execute(
+            select(ProgressLog).where(ProgressLog.project_id == p.id, ProgressLog.logged_at == today_local)
+        )
+        logged_today = sum(log.amount_completed for log in log_res.scalars().all())
+        metrics = calculate_metrics(p, today=today_local)
+        
+        if logged_today < metrics["daily_target"]:
+            remaining_projects.append(p)
+
     for reminder in due:
         age = now_utc - reminder.scheduled_for
-        if age > REMINDER_STALE_AFTER or not projects:
+        if age > REMINDER_STALE_AFTER:
             reminder.status = "Missed"
             continue
 
-        chosen_project = random.choice(projects)
-        metrics = calculate_metrics(chosen_project, today=get_user_local_today(user))
+        # If all study targets for today are successfully completed, skip sending the reminder entirely
+        if not remaining_projects:
+            reminder.status = "Sent"
+            reminder.sent_at = utc_now_naive()
+            continue
+
+        # Choose randomly only from projects that still need work today
+        chosen_project = random.choice(remaining_projects)
+        metrics = calculate_metrics(chosen_project, today=today_local)
         
         # Calculate indexes dynamically for alternating Amharic/English quotes
         log_res = await session.execute(
@@ -173,8 +193,19 @@ async def _dispatch_due_reminders(session, context, user) -> None:
             theme=user.theme,
             quote=quote
         )
+        
+        # Connects directly to the automated single-project progress logger
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Log Progress", callback_data=f"log_proj_direct_{chosen_project.id}")
+        ]])
+
         try:
-            await context.bot.send_message(chat_id=user.id, text=msg, parse_mode="Markdown")
+            await context.bot.send_message(
+                chat_id=user.id, 
+                text=msg, 
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
             reminder.status = "Sent"
             reminder.sent_at = utc_now_naive()
         except Exception as e:
