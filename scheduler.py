@@ -12,7 +12,6 @@ from database import AsyncSessionLocal
 from models import Project, ProgressLog, ReminderHistory, User
 from services.coach_logic import calculate_metrics, calculate_smart_reminders, get_user_local_today, utc_now_naive
 from messages.templates import get_alternating_quote, get_motivational_message, get_theme_pack, make_progress_bar
-from config import get_system_timezone_name
 
 logger = logging.getLogger(__name__)
 
