@@ -12,9 +12,11 @@ def utc_now_naive() -> datetime:
 
 def get_user_local_today(user: User) -> date:
     try:
-        tz = pytz.timezone(user.timezone) if user and user.timezone else pytz.utc
-    except pytz.UnknownTimeZoneError:
-        tz = pytz.utc
+        # Defaults to Addis Ababa instead of UTC to align with local clock
+        tz_name = user.timezone if user and user.timezone and user.timezone != "UTC" else "Africa/Addis_Ababa"
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone("Africa/Addis_Ababa")
     return datetime.now(tz).date()
 
 
@@ -43,7 +45,6 @@ def calculate_metrics(project: Project, today: date | None = None):
     deficit = max(0.0, expected_completed - project.completed_amount)
 
     if deficit > 0 and days_remaining > 0:
-        # Smooth the deficit over (remaining days + 4 smoothing days) to flatten the curve
         smoothing_window = 4
         effective_days = days_remaining + smoothing_window
         adaptive_target = original_pace + (deficit / effective_days)
@@ -88,18 +89,15 @@ def calculate_metrics(project: Project, today: date | None = None):
 
 
 def calculate_smart_reminders(user: User, projects: list[Project]) -> list[datetime]:
-    """
-    Implements Jittered Stratified Spacing.
-    Divides active wake hours into equal steps and assigns a randomized 
-    offset trigger inside each slot for balanced distribution.
-    """
     if not projects:
         return []
 
     try:
-        tz = pytz.timezone(user.timezone) if user.timezone else pytz.utc
+        # Defaults to Addis Ababa instead of UTC to align with local clock
+        tz_name = user.timezone if user.timezone and user.timezone != "UTC" else "Africa/Addis_Ababa"
+        tz = pytz.timezone(tz_name)
     except pytz.UnknownTimeZoneError:
-        tz = pytz.utc
+        tz = pytz.timezone("Africa/Addis_Ababa")
 
     now_local = datetime.now(tz)
 
@@ -112,7 +110,6 @@ def calculate_smart_reminders(user: User, projects: list[Project]) -> list[datet
 
     base_reminders = user.reminder_frequency if user.reminder_frequency else 3
 
-    # Hard/High-Priority study tracks receive one bonus reminder
     high_priority_active = any(p.importance == "High" or p.difficulty == "Hard" for p in projects)
     if high_priority_active:
         base_reminders += 1
@@ -122,12 +119,11 @@ def calculate_smart_reminders(user: User, projects: list[Project]) -> list[datet
     start_minutes = wake_h * 60 + wake_m
     end_minutes = sleep_h * 60 + sleep_m
     if end_minutes <= start_minutes:
-        end_minutes += 1440  # wrap past midnight
+        end_minutes += 1440
 
     total_minutes = end_minutes - start_minutes
     now_minutes = now_local.hour * 60 + now_local.minute
 
-    # Stratified intervals
     step = total_minutes / base_reminders
     reminders_today = []
 
@@ -135,11 +131,9 @@ def calculate_smart_reminders(user: User, projects: list[Project]) -> list[datet
         slot_start = start_minutes + int(i * step)
         slot_end = start_minutes + int((i + 1) * step)
 
-        # Skip past intervals completely to prevent backlog clustering
         if now_minutes >= slot_end:
             continue
 
-        # Jitter: Randomly shift reminder inside remaining window of the current slot
         effective_start = max(slot_start, now_minutes)
         rand_min = random.randint(effective_start, slot_end)
 

@@ -25,11 +25,11 @@ WEEKLY_SUMMARY_LOCAL_HOUR = 20              # send weekly summary at/after 20:00
 
 def _user_tz(user: User) -> pytz.BaseTzInfo:
     try:
-        # Fallback to detected system timezone if UTC is set to ensure local alignment
-        tz_name = user.timezone if user.timezone and user.timezone != "UTC" else get_system_timezone_name()
+        # Defaults to Addis Ababa instead of UTC to align with local clock
+        tz_name = user.timezone if user.timezone and user.timezone != "UTC" else "Africa/Addis_Ababa"
         return pytz.timezone(tz_name)
     except pytz.UnknownTimeZoneError:
-        return pytz.utc
+        return pytz.timezone("Africa/Addis_Ababa")
 
 
 def _parse_hhmm(value: str, fallback=(8, 0)) -> tuple[int, int]:

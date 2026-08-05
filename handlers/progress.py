@@ -36,15 +36,65 @@ async def start_log_progress(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user = user_res.scalar_one_or_none()
         theme = user.theme if user else "Emoji"
 
+    icons = get_theme_pack(theme)
+    direct_project_id = None
+    query = update.callback_query
+
+    # Extract direct project ID if triggered from an inline reminder button
+    if query and query.data.startswith("log_proj_direct_"):
+        try:
+            direct_project_id = int(query.data.split("_")[-1])
+        except ValueError:
+            pass
+
     if not projects:
         msg = "You don't have any active projects to log progress on. Add one first with ➕ New Project."
-        if update.callback_query:
-            await update.callback_query.answer()
-            await update.callback_query.edit_message_text(msg, reply_markup=get_main_menu_keyboard(theme))
+        if query:
+            await query.answer()
+            await query.edit_message_text(msg, reply_markup=get_main_menu_keyboard(theme))
         else:
             await update.message.reply_text(msg, reply_markup=get_main_menu_keyboard(theme))
         return ConversationHandler.END
 
+    # Jump straight to log amount entry if triggered from direct reminder button
+    if direct_project_id:
+        target_project = next((p for p in projects if p.id == direct_project_id), None)
+        if target_project:
+            context.user_data["log_project_id"] = target_project.id
+            cancel_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="menu_main")]])
+            await query.answer()
+            await query.edit_message_text(
+                f"📥 How much did you complete for *{escape_markdown(target_project.name, version=1)}*?\n"
+                f"_(Enter a number in {target_project.unit})_",
+                parse_mode="Markdown",
+                reply_markup=cancel_keyboard
+            )
+            return LOG_AMOUNT
+
+    # Auto-select if only 1 project is active
+    if len(projects) == 1:
+        single_proj = projects[0]
+        context.user_data["log_project_id"] = single_proj.id
+        cancel_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="menu_main")]])
+        
+        if query:
+            await query.answer()
+            await query.edit_message_text(
+                f"📥 How much did you complete for *{escape_markdown(single_proj.name, version=1)}*?\n"
+                f"_(Enter a number in {single_proj.unit})_",
+                parse_mode="Markdown",
+                reply_markup=cancel_keyboard
+            )
+        else:
+            await update.message.reply_text(
+                f"📥 How much did you complete for *{escape_markdown(single_proj.name, version=1)}*?\n"
+                f"_(Enter a number in {single_proj.unit})_",
+                parse_mode="Markdown",
+                reply_markup=cancel_keyboard
+            )
+        return LOG_AMOUNT
+
+    # Show list if multiple projects exist
     keyboard_buttons = []
     for p in projects:
         keyboard_buttons.append([InlineKeyboardButton(p.name, callback_data=f"log_select_{p.id}")])
@@ -52,9 +102,9 @@ async def start_log_progress(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard_buttons)
 
     text = "📚 *Which project did you make progress on?*\n\nSelect a project below:"
-    if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+    if query:
+        await query.answer()
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
     else:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
 
@@ -164,7 +214,6 @@ async def save_logged_progress(update: Update, context: ContextTypes.DEFAULT_TYP
     icons = get_theme_pack(theme)
     bar_str = make_progress_bar(metrics['completion_pct'], theme)
 
-    # Render success message directly alongside the ready-to-click dashboard
     success_text = (
         f"{congrats_txt}{milestone_txt}"
         f"✅ *Progress logged!*\n\n"
@@ -188,6 +237,7 @@ async def save_logged_progress(update: Update, context: ContextTypes.DEFAULT_TYP
 progress_conv_handler = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(start_log_progress, pattern="^menu_log_progress$"),
+        CallbackQueryHandler(start_log_progress, pattern="^log_proj_direct_\d+$"),  # Handles direct logging from reminders
         CommandHandler("done", start_log_progress),
     ],
     states={
